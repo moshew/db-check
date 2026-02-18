@@ -674,8 +674,7 @@ class BenchmarkRunner:
                     "Results": f"{int(stats.get('avg_result_count', 0)):,}",
                     "Mean (ms)": f"{float(stats.get('mean_ms', 0)):.2f}",
                     "P95 (ms)": f"{float(stats.get('p95_ms', 0)):.2f}",
-                    "P99 (ms)": f"{float(stats.get('p99_ms', 0)):.2f}",
-                    "Errors": int(stats.get("errors", 0))
+                    "P99 (ms)": f"{float(stats.get('p99_ms', 0)):.2f}"
                 })
             qdf = pd.DataFrame(rows)
             query_sections.append(
@@ -761,8 +760,7 @@ class BenchmarkRunner:
                         "CPU Avg %": "-" if not stats.get("available") or stats.get("cpu_avg_percent") is None else f"{float(stats.get('cpu_avg_percent')):.2f}",
                         "CPU Peak %": "-" if not stats.get("available") or stats.get("cpu_peak_percent") is None else f"{float(stats.get('cpu_peak_percent')):.2f}",
                         "Mem Avg MB": "-" if not stats.get("available") or stats.get("memory_avg_mb") is None else f"{float(stats.get('memory_avg_mb')):.2f}",
-                        "Mem Peak MB": "-" if not stats.get("available") or stats.get("memory_peak_mb") is None else f"{float(stats.get('memory_peak_mb')):.2f}",
-                        "Status": "ok" if stats.get("available") else escape(stats.get("reason", "unavailable"))
+                        "Mem Peak MB": "-" if not stats.get("available") or stats.get("memory_peak_mb") is None else f"{float(stats.get('memory_peak_mb')):.2f}"
                     })
         monitoring_html = (
             table_from_df(pd.DataFrame(monitoring_rows))

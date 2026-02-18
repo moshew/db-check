@@ -78,7 +78,7 @@ Options:
   --warmup N                  Number of warmup runs (default: 1)
   --with-indexes              Create indexes before queries
   --no-indexes                Explicitly disable indexes
-  --output PATH               Output path for results (default: results/benchmark)
+  --html PATH                 Base output path for HTML report and result artifacts (default: results/benchmark)
   --reset                     Reset databases before running
   --skip-inserts              Skip insert benchmark
   --skip-queries              Skip query benchmark
@@ -417,10 +417,10 @@ docker-compose logs mongodb  # Older versions
 
 ```bash
 # Test WITHOUT indexes
-python main.py --db both --records 50000 --no-indexes --output results/no_indexes
+python main.py --db both --records 50000 --no-indexes --html results/no_indexes
 
 # Test WITH indexes
-python main.py --db both --records 50000 --with-indexes --output results/with_indexes
+python main.py --db both --records 50000 --with-indexes --html results/with_indexes
 ```
 
 ### Testing Different Batch Sizes
