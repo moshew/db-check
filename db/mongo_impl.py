@@ -43,7 +43,7 @@ class MongoDB:
 
     def reset(self):
         """Drop all collections in the database."""
-        if self.db:
+        if self.db is not None:
             collection_names = self.db.list_collection_names()
             for collection_name in collection_names:
                 self.db[collection_name].drop()

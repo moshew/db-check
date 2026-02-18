@@ -14,6 +14,7 @@ from rich.panel import Panel
 import json
 import os
 from datetime import datetime
+from html import escape
 
 
 class BenchmarkRunner:
@@ -218,16 +219,27 @@ class BenchmarkRunner:
 
         return pd.DataFrame(comparison_data)
 
-    def save_results(self, results: Dict[str, Any], filename: str):
+    def save_results(self, results: Dict[str, Any], filename: str) -> str:
         """
         Save results to JSON and CSV files.
 
         Args:
             results: Results dictionary
             filename: Base filename (without extension)
+
+        Returns:
+            Base path without extension, including timestamp suffix
         """
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        base_path = os.path.join(self.output_dir, f"{filename}_{timestamp}")
+
+        # Support both bare names ("benchmark") and explicit paths ("results/benchmark")
+        if os.path.dirname(filename):
+            base_prefix = filename
+        else:
+            base_prefix = os.path.join(self.output_dir, filename)
+
+        base_path = f"{base_prefix}_{timestamp}"
+        os.makedirs(os.path.dirname(base_path) or ".", exist_ok=True)
 
         # Save JSON
         json_path = f"{base_path}.json"
@@ -244,6 +256,290 @@ class BenchmarkRunner:
                     csv_path = f"{base_path}_{db_name}_queries.csv"
                     df.to_csv(csv_path, index=False)
                     self.console.print(f"[green]Query results saved to {csv_path}[/green]")
+
+        return base_path
+
+    def export_reports(self, results: Dict[str, Any], base_path: str, formats: List[str]):
+        """
+        Export human-readable benchmark reports.
+
+        Args:
+            results: Benchmark results dictionary
+            base_path: Base output path returned by save_results
+            formats: List of formats to export (md/html/pdf)
+        """
+        requested = {fmt.lower().strip() for fmt in formats if fmt and fmt.strip()}
+        valid_formats = {"md", "html", "pdf"}
+        invalid_formats = sorted(requested - valid_formats)
+        if invalid_formats:
+            self.console.print(f"[yellow]Skipping unknown report formats: {', '.join(invalid_formats)}[/yellow]")
+        selected = sorted(requested & valid_formats)
+        if not selected:
+            return
+
+        md_text = self._build_markdown_report(results)
+
+        if "md" in selected:
+            md_path = f"{base_path}.md"
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(md_text)
+            self.console.print(f"[green]Report saved to {md_path}[/green]")
+
+        if "html" in selected:
+            html_path = f"{base_path}.html"
+            html_text = self._build_html_report(results)
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_text)
+            self.console.print(f"[green]Report saved to {html_path}[/green]")
+
+        if "pdf" in selected:
+            pdf_path = f"{base_path}.pdf"
+            self._build_pdf_report(md_text, pdf_path)
+
+    def _build_markdown_report(self, results: Dict[str, Any]) -> str:
+        """Build a Markdown report from benchmark results."""
+        lines = ["# Benchmark Report", ""]
+
+        config = results.get("config", {})
+        lines.extend(["## Configuration", ""])
+        for key, value in config.items():
+            lines.append(f"- `{key}`: `{value}`")
+        lines.append("")
+
+        metadata = results.get("metadata", {})
+        entities = metadata.get("entities", {})
+        if entities:
+            lines.extend(["## Entity Schema", ""])
+            for entity_name, entity_meta in entities.items():
+                fields = entity_meta.get("fields", {})
+                if not fields:
+                    continue
+                rows = [{"Field": field, "Type": field_type} for field, field_type in fields.items()]
+                df = pd.DataFrame(rows)
+                lines.append(f"### {entity_name}")
+                lines.append("")
+                lines.append(df.to_markdown(index=False))
+                lines.append("")
+
+        query_complexity = metadata.get("query_complexity", {})
+        if query_complexity:
+            lines.extend(["## Query Complexity", ""])
+            complexity_rows = []
+            for query_id, meta in sorted(query_complexity.items()):
+                complexity_rows.append({
+                    "ID": query_id,
+                    "Level": meta.get("level", ""),
+                    "Why": meta.get("why", ""),
+                    "Features": ", ".join(meta.get("features", []))
+                })
+            if complexity_rows:
+                df = pd.DataFrame(complexity_rows)
+                lines.append(df.to_markdown(index=False))
+                lines.append("")
+                very_high_count = sum(1 for row in complexity_rows if row["Level"] == "very_high")
+                lines.append(f"- Very high complexity queries: **{very_high_count}**")
+                lines.append("")
+
+        inserts = results.get("inserts", {})
+        if inserts:
+            lines.extend(["## Insert Performance", ""])
+            for db_name, entity_results in inserts.items():
+                rows = []
+                total_count = 0
+                total_duration = 0.0
+                for entity, stats in entity_results.items():
+                    count = int(stats.get("count", 0))
+                    duration = float(stats.get("duration_seconds", 0))
+                    throughput = float(stats.get("throughput_per_second", 0))
+                    rows.append([entity, f"{count:,}", f"{duration:.3f}", f"{throughput:,.0f}"])
+                    total_count += count
+                    total_duration += duration
+                avg_tp = total_count / total_duration if total_duration > 0 else 0.0
+                rows.append(["TOTAL", f"{total_count:,}", f"{total_duration:.3f}", f"{avg_tp:,.0f}"])
+                df = pd.DataFrame(rows, columns=["Entity", "Records", "Duration (s)", "Throughput (rec/s)"])
+                lines.append(f"### {db_name.upper()}")
+                lines.append("")
+                lines.append(df.to_markdown(index=False))
+                lines.append("")
+
+        queries = results.get("queries", {})
+        if queries:
+            lines.extend(["## Query Performance", ""])
+            for db_name, query_results in queries.items():
+                if not query_results:
+                    continue
+                rows = []
+                for query_id, stats in query_results.items():
+                    rows.append({
+                        "ID": query_id,
+                        "Query": stats.get("query_name", ""),
+                        "Results": stats.get("avg_result_count", 0),
+                        "Mean (ms)": round(float(stats.get("mean_ms", 0)), 3),
+                        "P95 (ms)": round(float(stats.get("p95_ms", 0)), 3),
+                        "P99 (ms)": round(float(stats.get("p99_ms", 0)), 3),
+                        "Errors": int(stats.get("errors", 0))
+                    })
+                df = pd.DataFrame(rows)
+                lines.append(f"### {db_name.upper()}")
+                lines.append("")
+                lines.append(df.to_markdown(index=False))
+                lines.append("")
+
+        sqlite_queries = queries.get("sqlite")
+        mongo_queries = queries.get("mongo")
+        if sqlite_queries and mongo_queries:
+            cmp_df = self.compare_databases(sqlite_queries, mongo_queries)
+            lines.extend(["## SQLite vs MongoDB Comparison", "", cmp_df.to_markdown(index=False), ""])
+
+        return "\n".join(lines)
+
+    def _build_html_report(self, results: Dict[str, Any]) -> str:
+        """Build a lightweight HTML report from benchmark results."""
+        html_sections = [
+            "<h1>Benchmark Report</h1>",
+            "<h2>Configuration</h2>",
+            "<table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>"
+        ]
+
+        for key, value in results.get("config", {}).items():
+            html_sections.append(f"<tr><td>{escape(str(key))}</td><td>{escape(str(value))}</td></tr>")
+        html_sections.append("</tbody></table>")
+
+        metadata = results.get("metadata", {})
+        entities = metadata.get("entities", {})
+        if entities:
+            html_sections.append("<h2>Entity Schema</h2>")
+            for entity_name, entity_meta in entities.items():
+                fields = entity_meta.get("fields", {})
+                if not fields:
+                    continue
+                rows = [{"Field": field, "Type": field_type} for field, field_type in fields.items()]
+                df = pd.DataFrame(rows)
+                html_sections.append(f"<h3>{escape(entity_name)}</h3>")
+                html_sections.append(df.to_html(index=False, border=0))
+
+        query_complexity = metadata.get("query_complexity", {})
+        if query_complexity:
+            complexity_rows = []
+            for query_id, meta in sorted(query_complexity.items()):
+                complexity_rows.append({
+                    "ID": query_id,
+                    "Level": meta.get("level", ""),
+                    "Why": meta.get("why", ""),
+                    "Features": ", ".join(meta.get("features", []))
+                })
+            if complexity_rows:
+                html_sections.append("<h2>Query Complexity</h2>")
+                df = pd.DataFrame(complexity_rows)
+                html_sections.append(df.to_html(index=False, border=0))
+                very_high_count = sum(1 for row in complexity_rows if row["Level"] == "very_high")
+                html_sections.append(f"<p><strong>Very high complexity queries:</strong> {very_high_count}</p>")
+
+        inserts = results.get("inserts", {})
+        if inserts:
+            html_sections.append("<h2>Insert Performance</h2>")
+            for db_name, entity_results in inserts.items():
+                rows = []
+                total_count = 0
+                total_duration = 0.0
+                for entity, stats in entity_results.items():
+                    count = int(stats.get("count", 0))
+                    duration = float(stats.get("duration_seconds", 0))
+                    throughput = float(stats.get("throughput_per_second", 0))
+                    rows.append({
+                        "Entity": entity,
+                        "Records": f"{count:,}",
+                        "Duration (s)": f"{duration:.3f}",
+                        "Throughput (rec/s)": f"{throughput:,.0f}"
+                    })
+                    total_count += count
+                    total_duration += duration
+                avg_tp = total_count / total_duration if total_duration > 0 else 0.0
+                rows.append({
+                    "Entity": "TOTAL",
+                    "Records": f"{total_count:,}",
+                    "Duration (s)": f"{total_duration:.3f}",
+                    "Throughput (rec/s)": f"{avg_tp:,.0f}"
+                })
+                df = pd.DataFrame(rows)
+                html_sections.append(f"<h3>{escape(db_name.upper())}</h3>")
+                html_sections.append(df.to_html(index=False, border=0))
+
+        queries = results.get("queries", {})
+        if queries:
+            html_sections.append("<h2>Query Performance</h2>")
+            for db_name, query_results in queries.items():
+                if not query_results:
+                    continue
+                rows = []
+                for query_id, stats in query_results.items():
+                    rows.append({
+                        "ID": query_id,
+                        "Query": stats.get("query_name", ""),
+                        "Results": stats.get("avg_result_count", 0),
+                        "Mean (ms)": round(float(stats.get("mean_ms", 0)), 3),
+                        "P95 (ms)": round(float(stats.get("p95_ms", 0)), 3),
+                        "P99 (ms)": round(float(stats.get("p99_ms", 0)), 3),
+                        "Errors": int(stats.get("errors", 0))
+                    })
+                df = pd.DataFrame(rows)
+                html_sections.append(f"<h3>{escape(db_name.upper())}</h3>")
+                html_sections.append(df.to_html(index=False, border=0))
+
+        sqlite_queries = queries.get("sqlite")
+        mongo_queries = queries.get("mongo")
+        if sqlite_queries and mongo_queries:
+            html_sections.append("<h2>SQLite vs MongoDB Comparison</h2>")
+            cmp_df = self.compare_databases(sqlite_queries, mongo_queries)
+            html_sections.append(cmp_df.to_html(index=False, border=0))
+
+        style = """
+<style>
+body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.45; color: #1f2937; }
+h1, h2, h3 { color: #0f172a; }
+table { border-collapse: collapse; margin-bottom: 20px; width: 100%; }
+th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; font-size: 14px; }
+th { background: #f3f4f6; }
+tr:nth-child(even) { background: #fafafa; }
+pre { background: #f8fafc; border: 1px solid #e5e7eb; padding: 10px; white-space: pre-wrap; }
+</style>
+"""
+        return f"<!doctype html><html><head><meta charset='utf-8'><title>Benchmark Report</title>{style}</head><body>{''.join(html_sections)}</body></html>"
+
+    def _build_pdf_report(self, md_text: str, output_path: str):
+        """
+        Build a simple PDF report using matplotlib.
+        Falls back gracefully if PDF backend is unavailable.
+        """
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.backends.backend_pdf import PdfPages
+            import textwrap
+
+            lines = md_text.splitlines()
+            pages = []
+            current = []
+            for line in lines:
+                wrapped = textwrap.wrap(line, width=110) or [""]
+                if len(current) + len(wrapped) > 50:
+                    pages.append(current)
+                    current = []
+                current.extend(wrapped)
+            if current:
+                pages.append(current)
+
+            with PdfPages(output_path) as pdf:
+                for page_lines in pages:
+                    fig = plt.figure(figsize=(8.27, 11.69))  # A4
+                    fig.patch.set_facecolor("white")
+                    text = "\n".join(page_lines)
+                    fig.text(0.04, 0.98, text, va="top", ha="left", family="monospace", fontsize=8)
+                    pdf.savefig(fig, bbox_inches="tight")
+                    plt.close(fig)
+
+            self.console.print(f"[green]Report saved to {output_path}[/green]")
+        except Exception as e:
+            self.console.print(f"[yellow]Could not create PDF report: {e}[/yellow]")
 
     def print_insert_summary(self, insert_results: Dict[str, Dict[str, Any]]):
         """

@@ -44,6 +44,137 @@ class DataGenerator:
 
         self.order_statuses = ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled']
 
+    @staticmethod
+    def get_entity_schema_definitions() -> Dict[str, Dict[str, Any]]:
+        """
+        Canonical entity field/type definitions used in reports.
+
+        Returns:
+            Dictionary keyed by entity name with field type mappings.
+        """
+        return {
+            'users': {
+                'fields': {
+                    'id': 'int',
+                    'username': 'str',
+                    'email': 'str',
+                    'full_name': 'str',
+                    'age': 'int',
+                    'country': 'str',
+                    'city': 'str',
+                    'registration_date': 'datetime',
+                    'last_login': 'datetime',
+                    'is_active': 'bool',
+                    'preferences': 'object',
+                    'tags': 'array<str>'
+                }
+            },
+            'products': {
+                'fields': {
+                    'id': 'int',
+                    'name': 'str',
+                    'description': 'str',
+                    'category': 'str',
+                    'price': 'float',
+                    'cost': 'float',
+                    'stock_quantity': 'int',
+                    'rating': 'float',
+                    'review_count': 'int',
+                    'is_featured': 'bool',
+                    'specifications': 'object',
+                    'tags': 'array<str>',
+                    'created_at': 'datetime'
+                }
+            },
+            'orders': {
+                'fields': {
+                    'id': 'int',
+                    'user_id': 'int',
+                    'order_date': 'datetime',
+                    'status': 'str',
+                    'total_amount': 'float',
+                    'discount': 'float',
+                    'tax': 'float',
+                    'shipping_address': 'object',
+                    'items': 'array<object>',
+                    'payment_method': 'str',
+                    'notes': 'str|null'
+                }
+            },
+            'events': {
+                'fields': {
+                    'id': 'int',
+                    'event_type': 'str',
+                    'user_id': 'int|null',
+                    'timestamp': 'datetime',
+                    'session_id': 'str',
+                    'page_url': 'str',
+                    'metadata': 'object',
+                    'duration_ms': 'int',
+                    'ip_address': 'str',
+                    'user_agent': 'str'
+                }
+            },
+            'sessions': {
+                'fields': {
+                    'id': 'int',
+                    'user_id': 'int|null',
+                    'start_time': 'datetime',
+                    'end_time': 'datetime',
+                    'duration_seconds': 'int',
+                    'page_views': 'int',
+                    'actions': 'array<object>',
+                    'device_info': 'object',
+                    'location': 'object'
+                }
+            },
+            'tickets': {
+                'fields': {
+                    'id': 'int',
+                    'user_id': 'int',
+                    'subject': 'str',
+                    'description': 'str',
+                    'priority': 'str',
+                    'status': 'str',
+                    'created_at': 'datetime',
+                    'updated_at': 'datetime',
+                    'resolved_at': 'datetime|null',
+                    'assignee': 'str|null',
+                    'comments': 'array<object>',
+                    'tags': 'array<str>'
+                }
+            },
+            'logs': {
+                'fields': {
+                    'id': 'int',
+                    'timestamp': 'datetime',
+                    'level': 'str',
+                    'logger_name': 'str',
+                    'message': 'str',
+                    'exception': 'object|null',
+                    'context': 'object',
+                    'hostname': 'str',
+                    'process_id': 'int'
+                }
+            },
+            'payments': {
+                'fields': {
+                    'id': 'int',
+                    'order_id': 'int',
+                    'user_id': 'int',
+                    'amount': 'float',
+                    'currency': 'str',
+                    'payment_method': 'str',
+                    'status': 'str',
+                    'transaction_id': 'str',
+                    'processed_at': 'datetime',
+                    'card_details': 'object',
+                    'billing_address': 'object',
+                    'metadata': 'object'
+                }
+            }
+        }
+
     def generate_users(self, count: int) -> List[Dict[str, Any]]:
         """
         Generate user entities with profile information.

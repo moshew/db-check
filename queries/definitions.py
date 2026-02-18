@@ -141,6 +141,95 @@ class QueryDefinitions:
             }
         ]
 
+    @staticmethod
+    def get_query_complexity_profiles() -> Dict[str, Dict[str, Any]]:
+        """
+        Return per-query complexity metadata for reporting.
+
+        Levels:
+          - low
+          - medium
+          - high
+          - very_high
+        """
+        return {
+            'Q1': {
+                'level': 'low',
+                'why': 'Simple selective filter + single sort',
+                'features': ['single collection/table filter', 'single sort key']
+            },
+            'Q2': {
+                'level': 'medium',
+                'why': 'Range + IN filter with sorting',
+                'features': ['range predicate', 'set membership predicate', 'sort']
+            },
+            'Q3': {
+                'level': 'medium',
+                'why': 'Time-window filtering + sort',
+                'features': ['time-range predicate', 'single sort key']
+            },
+            'Q4': {
+                'level': 'medium',
+                'why': 'Multiple predicates and compound ordering with limit',
+                'features': ['multi-filter predicate', 'multi-column sort', 'top-k limit']
+            },
+            'Q5': {
+                'level': 'high',
+                'why': 'Join/lookup + aggregate metrics + HAVING-style filter',
+                'features': ['join/lookup', 'group aggregation', 'derived metrics', 'post-aggregation filtering']
+            },
+            'Q6': {
+                'level': 'low',
+                'why': 'Simple two-threshold filter and sort',
+                'features': ['range predicates', 'single sort key']
+            },
+            'Q7': {
+                'level': 'high',
+                'why': 'Conditional aggregation over grouped dimensions',
+                'features': ['group by multiple dimensions', 'conditional aggregate']
+            },
+            'Q8': {
+                'level': 'medium',
+                'why': 'Selective logging filter with high result cap',
+                'features': ['set membership predicate', 'null-check predicate', 'limit']
+            },
+            'Q9': {
+                'level': 'high',
+                'why': 'Multi-metric aggregation over grouped dimensions',
+                'features': ['group aggregation', 'min/max/avg/sum metrics']
+            },
+            'Q10': {
+                'level': 'very_high',
+                'why': 'Array expansion + join/lookup + aggregate + ranking',
+                'features': ['array unnest/unwind', 'join/lookup', 'group aggregation', 'top-k ranking']
+            },
+            'Q11': {
+                'level': 'medium',
+                'why': 'Time bucketing with grouped counts',
+                'features': ['date bucketing', 'group aggregation']
+            },
+            'Q12': {
+                'level': 'very_high',
+                'why': 'Multi-join query across users/orders/payments with filtering and projection',
+                'features': ['multiple joins/lookups', 'time filter', 'status filter', 'sort + limit']
+            },
+            'Q13': {
+                'level': 'high',
+                'why': 'Time-window aggregate statistics by status',
+                'features': ['time-range predicate', 'group aggregation', 'multi-metric rollup']
+            },
+            'Q14': {
+                'level': 'high',
+                'why': 'Text-pattern search + numeric range + ordering',
+                'features': ['regex/LIKE pattern', 'numeric range', 'sort + limit']
+            },
+            'Q15': {
+                'level': 'very_high',
+                'why': 'Correlated multi-source activity summary with three joins/lookups and derived aggregates',
+                'features': ['multiple correlated lookups', 'derived counters', 'multi-source aggregation', 'post-aggregation filtering', 'sort + large limit']
+            }
+        }
+
     # Query implementations
 
     @staticmethod

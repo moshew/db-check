@@ -1,0 +1,750 @@
+<!doctype html><html><head><meta charset='utf-8'><title>Benchmark Report</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.45; color: #1f2937; }
+h1, h2, h3 { color: #0f172a; }
+table { border-collapse: collapse; margin-bottom: 20px; width: 100%; }
+th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; font-size: 14px; }
+th { background: #f3f4f6; }
+tr:nth-child(even) { background: #fafafa; }
+pre { background: #f8fafc; border: 1px solid #e5e7eb; padding: 10px; white-space: pre-wrap; }
+</style>
+</head><body><h1>Benchmark Report</h1><h2>Configuration</h2><table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody><tr><td>db</td><td>sqlite</td></tr><tr><td>records</td><td>200</td></tr><tr><td>seed</td><td>42</td></tr><tr><td>batch_size</td><td>100</td></tr><tr><td>iterations</td><td>1</td></tr><tr><td>warmup</td><td>0</td></tr><tr><td>with_indexes</td><td>True</td></tr><tr><td>no_indexes</td><td>False</td></tr><tr><td>output</td><td>results/schema_complexity_test</td></tr><tr><td>report_formats</td><td>md,html</td></tr><tr><td>reset</td><td>True</td></tr><tr><td>skip_inserts</td><td>False</td></tr><tr><td>skip_queries</td><td>False</td></tr></tbody></table><h2>Entity Schema</h2><h3>users</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Field</th>
+      <th>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>username</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>email</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>full_name</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>age</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>country</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>city</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>registration_date</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>last_login</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>is_active</td>
+      <td>bool</td>
+    </tr>
+    <tr>
+      <td>preferences</td>
+      <td>object</td>
+    </tr>
+    <tr>
+      <td>tags</td>
+      <td>array&lt;str&gt;</td>
+    </tr>
+  </tbody>
+</table><h3>products</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Field</th>
+      <th>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>name</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>description</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>category</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>price</td>
+      <td>float</td>
+    </tr>
+    <tr>
+      <td>cost</td>
+      <td>float</td>
+    </tr>
+    <tr>
+      <td>stock_quantity</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>rating</td>
+      <td>float</td>
+    </tr>
+    <tr>
+      <td>review_count</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>is_featured</td>
+      <td>bool</td>
+    </tr>
+    <tr>
+      <td>specifications</td>
+      <td>object</td>
+    </tr>
+    <tr>
+      <td>tags</td>
+      <td>array&lt;str&gt;</td>
+    </tr>
+    <tr>
+      <td>created_at</td>
+      <td>datetime</td>
+    </tr>
+  </tbody>
+</table><h3>orders</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Field</th>
+      <th>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>user_id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>order_date</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>status</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>total_amount</td>
+      <td>float</td>
+    </tr>
+    <tr>
+      <td>discount</td>
+      <td>float</td>
+    </tr>
+    <tr>
+      <td>tax</td>
+      <td>float</td>
+    </tr>
+    <tr>
+      <td>shipping_address</td>
+      <td>object</td>
+    </tr>
+    <tr>
+      <td>items</td>
+      <td>array&lt;object&gt;</td>
+    </tr>
+    <tr>
+      <td>payment_method</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>notes</td>
+      <td>str|null</td>
+    </tr>
+  </tbody>
+</table><h3>events</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Field</th>
+      <th>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>event_type</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>user_id</td>
+      <td>int|null</td>
+    </tr>
+    <tr>
+      <td>timestamp</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>session_id</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>page_url</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>metadata</td>
+      <td>object</td>
+    </tr>
+    <tr>
+      <td>duration_ms</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>ip_address</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>user_agent</td>
+      <td>str</td>
+    </tr>
+  </tbody>
+</table><h3>sessions</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Field</th>
+      <th>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>user_id</td>
+      <td>int|null</td>
+    </tr>
+    <tr>
+      <td>start_time</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>end_time</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>duration_seconds</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>page_views</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>actions</td>
+      <td>array&lt;object&gt;</td>
+    </tr>
+    <tr>
+      <td>device_info</td>
+      <td>object</td>
+    </tr>
+    <tr>
+      <td>location</td>
+      <td>object</td>
+    </tr>
+  </tbody>
+</table><h3>tickets</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Field</th>
+      <th>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>user_id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>subject</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>description</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>priority</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>status</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>created_at</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>updated_at</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>resolved_at</td>
+      <td>datetime|null</td>
+    </tr>
+    <tr>
+      <td>assignee</td>
+      <td>str|null</td>
+    </tr>
+    <tr>
+      <td>comments</td>
+      <td>array&lt;object&gt;</td>
+    </tr>
+    <tr>
+      <td>tags</td>
+      <td>array&lt;str&gt;</td>
+    </tr>
+  </tbody>
+</table><h3>logs</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Field</th>
+      <th>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>timestamp</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>level</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>logger_name</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>message</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>exception</td>
+      <td>object|null</td>
+    </tr>
+    <tr>
+      <td>context</td>
+      <td>object</td>
+    </tr>
+    <tr>
+      <td>hostname</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>process_id</td>
+      <td>int</td>
+    </tr>
+  </tbody>
+</table><h3>payments</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Field</th>
+      <th>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>order_id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>user_id</td>
+      <td>int</td>
+    </tr>
+    <tr>
+      <td>amount</td>
+      <td>float</td>
+    </tr>
+    <tr>
+      <td>currency</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>payment_method</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>status</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>transaction_id</td>
+      <td>str</td>
+    </tr>
+    <tr>
+      <td>processed_at</td>
+      <td>datetime</td>
+    </tr>
+    <tr>
+      <td>card_details</td>
+      <td>object</td>
+    </tr>
+    <tr>
+      <td>billing_address</td>
+      <td>object</td>
+    </tr>
+    <tr>
+      <td>metadata</td>
+      <td>object</td>
+    </tr>
+  </tbody>
+</table><h2>Query Complexity</h2><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>ID</th>
+      <th>Level</th>
+      <th>Why</th>
+      <th>Features</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Q1</td>
+      <td>low</td>
+      <td>Simple selective filter + single sort</td>
+      <td>single collection/table filter, single sort key</td>
+    </tr>
+    <tr>
+      <td>Q10</td>
+      <td>very_high</td>
+      <td>Array expansion + join/lookup + aggregate + ranking</td>
+      <td>array unnest/unwind, join/lookup, group aggregation, top-k ranking</td>
+    </tr>
+    <tr>
+      <td>Q11</td>
+      <td>medium</td>
+      <td>Time bucketing with grouped counts</td>
+      <td>date bucketing, group aggregation</td>
+    </tr>
+    <tr>
+      <td>Q12</td>
+      <td>very_high</td>
+      <td>Multi-join query across users/orders/payments with filtering and projection</td>
+      <td>multiple joins/lookups, time filter, status filter, sort + limit</td>
+    </tr>
+    <tr>
+      <td>Q13</td>
+      <td>high</td>
+      <td>Time-window aggregate statistics by status</td>
+      <td>time-range predicate, group aggregation, multi-metric rollup</td>
+    </tr>
+    <tr>
+      <td>Q14</td>
+      <td>high</td>
+      <td>Text-pattern search + numeric range + ordering</td>
+      <td>regex/LIKE pattern, numeric range, sort + limit</td>
+    </tr>
+    <tr>
+      <td>Q15</td>
+      <td>very_high</td>
+      <td>Correlated multi-source activity summary with three joins/lookups and derived aggregates</td>
+      <td>multiple correlated lookups, derived counters, multi-source aggregation, post-aggregation filtering, sort + large limit</td>
+    </tr>
+    <tr>
+      <td>Q2</td>
+      <td>medium</td>
+      <td>Range + IN filter with sorting</td>
+      <td>range predicate, set membership predicate, sort</td>
+    </tr>
+    <tr>
+      <td>Q3</td>
+      <td>medium</td>
+      <td>Time-window filtering + sort</td>
+      <td>time-range predicate, single sort key</td>
+    </tr>
+    <tr>
+      <td>Q4</td>
+      <td>medium</td>
+      <td>Multiple predicates and compound ordering with limit</td>
+      <td>multi-filter predicate, multi-column sort, top-k limit</td>
+    </tr>
+    <tr>
+      <td>Q5</td>
+      <td>high</td>
+      <td>Join/lookup + aggregate metrics + HAVING-style filter</td>
+      <td>join/lookup, group aggregation, derived metrics, post-aggregation filtering</td>
+    </tr>
+    <tr>
+      <td>Q6</td>
+      <td>low</td>
+      <td>Simple two-threshold filter and sort</td>
+      <td>range predicates, single sort key</td>
+    </tr>
+    <tr>
+      <td>Q7</td>
+      <td>high</td>
+      <td>Conditional aggregation over grouped dimensions</td>
+      <td>group by multiple dimensions, conditional aggregate</td>
+    </tr>
+    <tr>
+      <td>Q8</td>
+      <td>medium</td>
+      <td>Selective logging filter with high result cap</td>
+      <td>set membership predicate, null-check predicate, limit</td>
+    </tr>
+    <tr>
+      <td>Q9</td>
+      <td>high</td>
+      <td>Multi-metric aggregation over grouped dimensions</td>
+      <td>group aggregation, min/max/avg/sum metrics</td>
+    </tr>
+  </tbody>
+</table><p><strong>Very high complexity queries:</strong> 3</p><h2>Insert Performance</h2><h3>SQLITE</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Entity</th>
+      <th>Records</th>
+      <th>Duration (s)</th>
+      <th>Throughput (rec/s)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>users</td>
+      <td>200</td>
+      <td>0.006</td>
+      <td>35,480</td>
+    </tr>
+    <tr>
+      <td>products</td>
+      <td>2</td>
+      <td>0.000</td>
+      <td>7,183</td>
+    </tr>
+    <tr>
+      <td>orders</td>
+      <td>8</td>
+      <td>0.001</td>
+      <td>5,758</td>
+    </tr>
+    <tr>
+      <td>events</td>
+      <td>40</td>
+      <td>0.001</td>
+      <td>30,777</td>
+    </tr>
+    <tr>
+      <td>sessions</td>
+      <td>6</td>
+      <td>0.001</td>
+      <td>7,426</td>
+    </tr>
+    <tr>
+      <td>tickets</td>
+      <td>1</td>
+      <td>0.000</td>
+      <td>3,189</td>
+    </tr>
+    <tr>
+      <td>logs</td>
+      <td>80</td>
+      <td>0.002</td>
+      <td>44,281</td>
+    </tr>
+    <tr>
+      <td>payments</td>
+      <td>7</td>
+      <td>0.001</td>
+      <td>8,174</td>
+    </tr>
+    <tr>
+      <td>TOTAL</td>
+      <td>344</td>
+      <td>0.012</td>
+      <td>27,766</td>
+    </tr>
+  </tbody>
+</table><h2>Query Performance</h2><h3>SQLITE</h3><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>ID</th>
+      <th>Query</th>
+      <th>Results</th>
+      <th>Mean (ms)</th>
+      <th>P95 (ms)</th>
+      <th>P99 (ms)</th>
+      <th>Errors</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Q1</td>
+      <td>Active Users by Country</td>
+      <td>0</td>
+      <td>0.263</td>
+      <td>0.263</td>
+      <td>0.263</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q2</td>
+      <td>High-Value Orders</td>
+      <td>3</td>
+      <td>0.383</td>
+      <td>0.383</td>
+      <td>0.383</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q3</td>
+      <td>Recent Events by Type</td>
+      <td>1</td>
+      <td>0.180</td>
+      <td>0.180</td>
+      <td>0.180</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q4</td>
+      <td>Product Search with Multiple Filters</td>
+      <td>0</td>
+      <td>0.130</td>
+      <td>0.130</td>
+      <td>0.130</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q5</td>
+      <td>User Order History with Join</td>
+      <td>8</td>
+      <td>0.514</td>
+      <td>0.514</td>
+      <td>0.514</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q6</td>
+      <td>Session Duration Analysis</td>
+      <td>6</td>
+      <td>0.121</td>
+      <td>0.121</td>
+      <td>0.121</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q7</td>
+      <td>Ticket Status Aggregation</td>
+      <td>1</td>
+      <td>0.200</td>
+      <td>0.200</td>
+      <td>0.200</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q8</td>
+      <td>Error Log Analysis</td>
+      <td>12</td>
+      <td>0.448</td>
+      <td>0.448</td>
+      <td>0.448</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q9</td>
+      <td>Payment Method Statistics</td>
+      <td>6</td>
+      <td>0.199</td>
+      <td>0.199</td>
+      <td>0.199</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q10</td>
+      <td>Top Selling Products</td>
+      <td>2</td>
+      <td>0.373</td>
+      <td>0.373</td>
+      <td>0.373</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q11</td>
+      <td>User Registration Trends</td>
+      <td>25</td>
+      <td>0.508</td>
+      <td>0.508</td>
+      <td>0.508</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q12</td>
+      <td>Complex Multi-Table Join</td>
+      <td>0</td>
+      <td>0.128</td>
+      <td>0.128</td>
+      <td>0.128</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q13</td>
+      <td>Time Range with Aggregation</td>
+      <td>3</td>
+      <td>0.192</td>
+      <td>0.192</td>
+      <td>0.192</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q14</td>
+      <td>Text Pattern Search</td>
+      <td>2</td>
+      <td>0.151</td>
+      <td>0.151</td>
+      <td>0.151</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Q15</td>
+      <td>User Activity Summary</td>
+      <td>43</td>
+      <td>1.685</td>
+      <td>1.685</td>
+      <td>1.685</td>
+      <td>0</td>
+    </tr>
+  </tbody>
+</table></body></html>

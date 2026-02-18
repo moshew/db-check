@@ -258,6 +258,13 @@ Examples:
     )
 
     parser.add_argument(
+        '--report-formats',
+        type=str,
+        default='md,html,pdf',
+        help='Comma-separated report formats to export: md,html,pdf (default: md,html,pdf)'
+    )
+
+    parser.add_argument(
         '--reset',
         action='store_true',
         help='Reset databases before running (drop all data)'
@@ -306,8 +313,26 @@ Examples:
     runner = BenchmarkRunner(output_dir="results")
 
     # Results storage
+    query_complexity = QueryDefinitions.get_query_complexity_profiles()
+    very_complex_queries = [
+        qid for qid, meta in query_complexity.items()
+        if meta.get('level') == 'very_high'
+    ]
+    if not very_complex_queries:
+        console.print("[red]Error: No very_high complexity queries defined.[/red]")
+        sys.exit(1)
+
+    console.print(
+        f"[cyan]Complex query set verified:[/cyan] {len(very_complex_queries)} very_high queries "
+        f"({', '.join(sorted(very_complex_queries))})"
+    )
+
     all_results = {
         'config': vars(args),
+        'metadata': {
+            'entities': DataGenerator.get_entity_schema_definitions(),
+            'query_complexity': query_complexity
+        },
         'inserts': {},
         'queries': {}
     }
@@ -392,7 +417,9 @@ Examples:
 
         # Save results
         console.print("\n[bold]Saving results...[/bold]")
-        runner.save_results(all_results, args.output)
+        base_path = runner.save_results(all_results, args.output)
+        report_formats = [fmt.strip() for fmt in args.report_formats.split(',') if fmt.strip()]
+        runner.export_reports(all_results, base_path, report_formats)
 
         # Print database sizes
         console.print("\n[bold cyan]Database Sizes:[/bold cyan]")
