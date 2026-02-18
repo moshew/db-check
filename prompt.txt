@@ -1,0 +1,92 @@
+## Prompt (English)
+
+You are an experienced software engineer. Build a complete Python demo project that benchmarks performance of **SQLite** versus **MongoDB**.
+
+### Goals
+1) Provide the simplest setup for both databases:
+- **SQLite**: local file DB (e.g., `benchmark.db`) using Python’s built-in `sqlite3`.
+- **MongoDB**: via **Docker Compose** (recommended), with a `mongo` container and optional `mongo-express`.
+- Include clear setup instructions: `requirements.txt`, `pip` commands, and Docker commands.
+
+2) Generate **tens of thousands** of **fake entities** (default: 50,000–200,000) using Faker.
+- Create at least **5–8 different entity types** (e.g., Users, Orders, Products, Events, Sessions, Tickets, Logs, Payments).
+- Each entity type must have different fields; some simple and some complex:
+  - Scalar fields: strings, ints, floats, bools, dates/timestamps.
+  - Complex fields: nested objects / arrays (Mongo), and in SQLite represent them either as JSON (TEXT) or via relational child tables (provide both options and pick one as default).
+  - Relationships: one-to-many (User→Orders), many-to-many (Orders↔Products), etc.
+- Support a deterministic seed for reproducibility.
+
+3) Execute **complex queries** over the data to simulate realistic usage.
+Define a set of **10–15 query workloads** with variations:
+- Multi-filter queries (AND/OR), time ranges, numeric ranges, prefix/suffix search, “full-text-like” matching where feasible.
+- Aggregations:
+  - group by + count/sum/avg
+  - percentiles / top-N
+  - window-style queries in SQLite if relevant
+  - Mongo aggregation pipeline using `$match`, `$group`, `$lookup` (if used), `$sort`, `$limit`
+- Joins in SQLite (Users + Orders + OrderItems + Products).
+- Mongo approach: `$lookup` and/or denormalized queries (explain which design is chosen).
+- Include queries returning small result sets and large result sets.
+
+4) Measure performance for:
+- Inserts:
+  - single inserts vs bulk inserts (tunable batch sizes)
+  - total time + throughput (records/sec)
+- Queries:
+  - latency per query with P50/P95/P99, mean, standard deviation
+  - multiple iterations per query, including warmup runs
+- Indexing:
+  - create planned indexes in both DBs; run benchmark with and without indexes
+  - document which indexes were created and why
+
+5) Project structure & outputs
+Organize the project into modules/files:
+- `main.py` CLI entrypoint to run everything
+- `db/sqlite_impl.py`, `db/mongo_impl.py` with a common interface (insert/query)
+- `data/generator.py` for data generation
+- `bench/runner.py` for timing and measurement
+- `queries/` store query definitions declaratively for easy extension
+- `results/` store outputs as CSV + JSON
+- Produce a summary report at the end:
+  - tables for inserts + queries
+  - basic charts using matplotlib (optional but preferred)
+  - readable console output
+
+6) Technical requirements
+- Python 3.11+
+- Use:
+  - `faker`
+  - `pymongo`
+  - `pandas` (optional for analysis)
+  - `rich` or `tabulate` for console tables
+- Timing: `time.perf_counter()` + percentile computation
+- Ensure good insert performance:
+  - SQLite: transactions + `executemany`
+  - Mongo: `insert_many` with batch size
+
+7) CLI
+Provide CLI flags:
+- `--db sqlite|mongo|both`
+- `--records N`
+- `--seed`
+- `--batch-size`
+- `--iterations`
+- `--warmup`
+- `--with-indexes / --no-indexes`
+- `--output results/...`
+- `--reset` to reset DBs at start (drop collections / delete SQLite file)
+
+8) Reliability & UX
+- Show progress (e.g., tqdm) during generation and inserts
+- Handle exceptions and print helpful error messages
+- Ensure it runs “out of the box” on a typical local machine
+
+### Required assistant output
+- Full contents of every project file (real code, not pseudocode)
+- `docker-compose.yml`
+- `requirements.txt`
+- Step-by-step run instructions
+- Short explanation of schema choices (normalized vs denormalized) and why it matters for benchmarking
+- Example output results
+
+Make sure the project is runnable end-to-end without manual fixes.
