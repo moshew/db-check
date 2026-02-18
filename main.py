@@ -324,7 +324,8 @@ Examples:
         'config': vars(args),
         'metadata': {
             'entities': DataGenerator.get_entity_schema_definitions(),
-            'query_complexity': query_complexity
+            'query_complexity': query_complexity,
+            'artifacts': {}
         },
         'monitoring': {},
         'inserts': {},
@@ -424,6 +425,7 @@ Examples:
                 # Create chart
                 chart_path = f"{args.output}_comparison.png"
                 runner.create_performance_chart(comparison_df, chart_path)
+                all_results['metadata']['artifacts']['comparison_chart_png'] = chart_path
 
         runner.print_monitoring_summary(all_results['monitoring'])
 

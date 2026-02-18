@@ -18,6 +18,7 @@ from html import escape
 import threading
 import subprocess
 import re
+import base64
 
 try:
     import psutil
@@ -506,6 +507,7 @@ class BenchmarkRunner:
         metadata = results.get("metadata", {})
         entities = metadata.get("entities", {})
         query_complexity = metadata.get("query_complexity", {})
+        artifacts = metadata.get("artifacts", {})
         inserts = results.get("inserts", {})
         queries = results.get("queries", {})
         monitoring = results.get("monitoring", {})
@@ -591,7 +593,10 @@ class BenchmarkRunner:
             )
 
         complexity_rows = []
-        for query_id, meta in sorted(query_complexity.items()):
+        for query_id, meta in sorted(
+            query_complexity.items(),
+            key=lambda item: int(re.sub(r"[^0-9]", "", item[0]) or 0)
+        ):
             complexity_rows.append({
                 "ID": query_id,
                 "Complexity": level_badge(meta.get("level", "low")),
@@ -688,6 +693,27 @@ class BenchmarkRunner:
             </section>
             """
 
+        embedded_chart_html = ""
+        chart_path = artifacts.get("comparison_chart_png")
+        if chart_path and os.path.exists(chart_path):
+            try:
+                with open(chart_path, "rb") as chart_file:
+                    chart_b64 = base64.b64encode(chart_file.read()).decode("ascii")
+                embedded_chart_html = f"""
+                <section class="panel">
+                  <h3>Comparison Chart (Embedded PNG)</h3>
+                  <p class="muted">This image is embedded in the HTML as Base64 (self-contained report).</p>
+                  <img class="embedded-chart" src="data:image/png;base64,{chart_b64}" alt="SQLite vs MongoDB comparison chart" />
+                </section>
+                """
+            except Exception as exc:
+                embedded_chart_html = f"""
+                <section class="panel">
+                  <h3>Comparison Chart (Embedded PNG)</h3>
+                  <p class="muted">Could not embed chart image: {escape(str(exc))}</p>
+                </section>
+                """
+
         monitoring_rows = []
         for db_name, phases in monitoring.items():
             for phase_name, phase_stats in phases.items():
@@ -778,6 +804,7 @@ class BenchmarkRunner:
     .report-table th, .report-table td {{ border-bottom:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }}
     .report-table th {{ background:#f8fbff; color:#0b3b55; position:sticky; top:0; }}
     .report-table tr:hover td {{ background:#f7fbff; }}
+    .report-table th:nth-child(2), .report-table td:nth-child(2) {{ min-width: 118px; }}
     .muted {{ color:var(--muted); }}
     details.entity-card {{
       background:#fff; border:1px solid var(--line); border-radius:12px; padding:8px 12px; margin-bottom:10px;
@@ -786,6 +813,7 @@ class BenchmarkRunner:
     .badge {{
       display:inline-block; border-radius:999px; padding:2px 9px; font-size:.74rem; font-weight:700;
       text-transform:uppercase; letter-spacing:.04em;
+      white-space: nowrap;
     }}
     .badge.low {{ background:#e2e8f0; color:#334155; }}
     .badge.medium {{ background:#dbeafe; color:#1d4ed8; }}
@@ -809,6 +837,13 @@ class BenchmarkRunner:
     .speed-fill.mongo {{ background:linear-gradient(90deg, #60a5fa, #1d4ed8); }}
     .speed-fill.neutral {{ background:linear-gradient(90deg, #94a3b8, #64748b); }}
     .speed-value {{ text-align:right; font-size:.86rem; font-weight:600; }}
+    .embedded-chart {{
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      box-shadow: 0 10px 28px rgba(15,23,42,.10);
+      background: #fff;
+    }}
     @keyframes fadeUp {{ from {{ opacity:0; transform:translateY(8px); }} to {{ opacity:1; transform:none; }} }}
   </style>
 </head>
@@ -872,6 +907,10 @@ class BenchmarkRunner:
         <p class="muted">Sampled during inserts and queries for each solution.</p>
         {monitoring_html}
       </article>
+    </section>
+
+    <section class="section">
+      {embedded_chart_html}
     </section>
 
     <section class="section">
