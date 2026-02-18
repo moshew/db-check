@@ -9,7 +9,9 @@ A comprehensive, production-ready benchmarking tool that compares SQLite and Mon
 - **15 Complex Queries**: Multi-filter, aggregations, joins, time ranges, text search, percentiles
 - **Detailed Performance Metrics**: P50/P95/P99 latencies, throughput, standard deviation
 - **Index Comparison**: Benchmark with and without indexes
-- **Comprehensive Output**: JSON/CSV results, console tables, comparison charts
+- **Comprehensive Output**: JSON/CSV artifacts, visual HTML report, comparison chart
+- **Resource Monitoring**: CPU/Memory monitoring for benchmark runner and MongoDB container
+- **Query Complexity Metadata**: Per-query complexity levels (low/medium/high/very_high)
 - **Reproducible**: Deterministic seeding for consistent benchmarks
 - **Production-Ready**: Error handling, progress bars, rich CLI output
 
@@ -25,7 +27,7 @@ A comprehensive, production-ready benchmarking tool that compares SQLite and Mon
 1. **Install Python dependencies:**
 
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 2. **Start MongoDB (via Docker):**
@@ -60,6 +62,9 @@ python main.py --db both --records 50000 --with-indexes --iterations 10
 
 # Run MongoDB only with 100k users
 python main.py --db mongo --records 100000 --with-indexes
+
+# Run and set custom base output path for generated HTML/artifacts
+python main.py --db both --records 50000 --with-indexes --html results/run_01
 ```
 
 ## Usage
@@ -129,9 +134,10 @@ db-check/
 │   └── runner.py          # Benchmark runner and metrics
 │
 └── results/               # Output directory
-    ├── *.json            # Raw results
-    ├── *.csv             # Query results
-    └── *.png             # Comparison charts
+    ├── *.json            # Full benchmark + metadata
+    ├── *.csv             # Per-DB query metrics
+    ├── *.html            # Visual report (main output)
+    └── *.png             # Comparison chart (embedded into HTML for --db both)
 ```
 
 ## Data Model
@@ -309,7 +315,12 @@ The benchmark collects comprehensive statistics:
 - Min/Max latency (ms)
 - Standard deviation
 - Result count
-- Error rate
+
+### Monitoring Metrics
+- Runner process CPU avg/peak (%)
+- Runner process memory avg/peak (MB)
+- MongoDB container CPU avg/peak (%) when `docker stats` is accessible
+- MongoDB container memory avg/peak (MB) when `docker stats` is accessible
 
 ### Comparison
 - Query-by-query comparison
@@ -323,11 +334,21 @@ Results are saved with timestamps in the `results/` directory:
 
 ```
 results/
-├── benchmark_20240115_143022.json              # Complete results
-├── benchmark_20240115_143022_sqlite_queries.csv # SQLite query results
-├── benchmark_20240115_143022_mongo_queries.csv  # MongoDB query results
-└── benchmark_comparison.png                     # Performance chart
+├── benchmark_20240115_143022.json               # Complete benchmark + metadata
+├── benchmark_20240115_143022_sqlite_queries.csv # SQLite query metrics
+├── benchmark_20240115_143022_mongo_queries.csv  # MongoDB query metrics
+├── benchmark_20240115_143022.html               # Visual report (primary)
+└── benchmark_comparison.png                      # Comparison chart (for --db both)
 ```
+
+The HTML report includes:
+- configuration summary
+- entity schema section (field names + field types)
+- query complexity section
+- insert/query performance tables
+- resource monitoring tables
+- SQLite vs MongoDB comparison table (with complexity indicator)
+- embedded comparison chart image (when available)
 
 ## Understanding Results
 
@@ -390,6 +411,24 @@ docker-compose up -d         # Older versions
 docker compose logs mongodb  # Newer Docker Desktop
 # OR
 docker-compose logs mongodb  # Older versions
+```
+
+### Mongo Container Monitoring Permission Denied
+
+**Error**: `permission denied while trying to connect to the Docker daemon socket...`
+
+**Cause**: Current shell session does not have docker-group access.
+
+**Solution**:
+```bash
+# one-time setup
+sudo usermod -aG docker $USER
+
+# refresh current shell group membership
+newgrp docker
+
+# verify
+docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' benchmark_mongo
 ```
 
 ### Out of Memory
