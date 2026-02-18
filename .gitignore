@@ -41,10 +41,7 @@ env/
 benchmark.db*
 
 # Results
-results/*.json
-results/*.csv
-results/*.png
-!results/.gitkeep
+results/*
 
 # OS
 .DS_Store

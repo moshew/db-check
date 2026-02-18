@@ -6,7 +6,7 @@ Measures insert and query performance with detailed metrics.
 import time
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List, Callable
+from typing import Dict, Any, List, Callable, Optional
 from tqdm import tqdm
 from rich.console import Console
 from rich.table import Table
@@ -15,6 +15,154 @@ import json
 import os
 from datetime import datetime
 from html import escape
+import threading
+import subprocess
+import re
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+
+def _parse_cpu_percent(cpu_text: str) -> Optional[float]:
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)", cpu_text or "")
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _parse_size_to_mb(size_text: str) -> Optional[float]:
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGTP]?i?B)", size_text or "", re.IGNORECASE)
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2).lower()
+    factors = {
+        "b": 1 / (1024 * 1024),
+        "kib": 1 / 1024,
+        "kb": 1 / 1024,
+        "mib": 1.0,
+        "mb": 1.0,
+        "gib": 1024.0,
+        "gb": 1024.0,
+        "tib": 1024.0 * 1024.0,
+        "tb": 1024.0 * 1024.0,
+    }
+    factor = factors.get(unit)
+    if factor is None:
+        return None
+    return value * factor
+
+
+class _BaseMonitor:
+    def __init__(self, sample_interval_s: float = 0.5):
+        self.sample_interval_s = sample_interval_s
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._cpu_samples: List[float] = []
+        self._mem_samples_mb: List[float] = []
+        self._error: Optional[str] = None
+        self._start_ts = 0.0
+
+    def start(self):
+        self._running = True
+        self._start_ts = time.perf_counter()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> Dict[str, Any]:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=2.0)
+
+        duration = max(0.0, time.perf_counter() - self._start_ts)
+        if self._error:
+            return {"available": False, "reason": self._error}
+
+        if not self._cpu_samples and not self._mem_samples_mb:
+            return {"available": False, "reason": "no_samples_collected"}
+
+        return {
+            "available": True,
+            "samples": max(len(self._cpu_samples), len(self._mem_samples_mb)),
+            "duration_seconds": duration,
+            "cpu_avg_percent": float(np.mean(self._cpu_samples)) if self._cpu_samples else None,
+            "cpu_peak_percent": float(np.max(self._cpu_samples)) if self._cpu_samples else None,
+            "memory_avg_mb": float(np.mean(self._mem_samples_mb)) if self._mem_samples_mb else None,
+            "memory_peak_mb": float(np.max(self._mem_samples_mb)) if self._mem_samples_mb else None,
+        }
+
+    def _run(self):
+        raise NotImplementedError
+
+
+class _ProcessMonitor(_BaseMonitor):
+    def __init__(self, sample_interval_s: float = 0.5):
+        super().__init__(sample_interval_s=sample_interval_s)
+        self._process = psutil.Process(os.getpid()) if psutil else None
+
+    def _run(self):
+        if self._process is None:
+            self._error = "psutil_not_installed"
+            return
+
+        while self._running:
+            try:
+                cpu = self._process.cpu_percent(interval=self.sample_interval_s)
+                mem_mb = self._process.memory_info().rss / (1024 * 1024)
+                self._cpu_samples.append(cpu)
+                self._mem_samples_mb.append(mem_mb)
+            except Exception as exc:
+                self._error = str(exc)
+                self._running = False
+                return
+
+
+class _DockerContainerMonitor(_BaseMonitor):
+    def __init__(self, container_name: str, sample_interval_s: float = 1.0):
+        super().__init__(sample_interval_s=sample_interval_s)
+        self.container_name = container_name
+
+    def _run(self):
+        while self._running:
+            try:
+                proc = subprocess.run(
+                    [
+                        "docker", "stats", "--no-stream",
+                        "--format", "{{.CPUPerc}}|{{.MemUsage}}",
+                        self.container_name
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if proc.returncode != 0:
+                    self._error = proc.stderr.strip() or proc.stdout.strip() or "docker_stats_failed"
+                    self._running = False
+                    return
+
+                line = proc.stdout.strip().splitlines()
+                if not line:
+                    time.sleep(self.sample_interval_s)
+                    continue
+
+                cpu_text, _, mem_text = line[0].partition("|")
+                cpu = _parse_cpu_percent(cpu_text)
+                mem_used = _parse_size_to_mb((mem_text or "").split("/")[0].strip())
+                if cpu is not None:
+                    self._cpu_samples.append(cpu)
+                if mem_used is not None:
+                    self._mem_samples_mb.append(mem_used)
+            except FileNotFoundError:
+                self._error = "docker_command_not_found"
+                self._running = False
+                return
+            except Exception as exc:
+                self._error = str(exc)
+                self._running = False
+                return
+            time.sleep(self.sample_interval_s)
 
 
 class BenchmarkRunner:
@@ -36,6 +184,40 @@ class BenchmarkRunner:
 
         # Ensure output directory exists
         os.makedirs(output_dir, exist_ok=True)
+
+    def run_with_monitoring(self, db_name: str, phase_name: str, workload: Callable[[], Any]) -> tuple[Any, Dict[str, Any]]:
+        """
+        Run a workload while sampling CPU/Memory monitoring metrics.
+
+        Args:
+            db_name: Database target (sqlite/mongo)
+            phase_name: Logical phase name (inserts/queries)
+            workload: Callable to execute
+
+        Returns:
+            Tuple of (workload result, monitoring metrics dictionary)
+        """
+        process_monitor = _ProcessMonitor(sample_interval_s=0.5)
+        mongo_monitor = _DockerContainerMonitor(container_name="benchmark_mongo", sample_interval_s=1.0) \
+            if db_name == "mongo" else None
+
+        process_monitor.start()
+        if mongo_monitor:
+            mongo_monitor.start()
+
+        try:
+            result = workload()
+        finally:
+            process_stats = process_monitor.stop()
+            mongo_stats = mongo_monitor.stop() if mongo_monitor else None
+
+        metrics = {
+            "phase": phase_name,
+            "runner_process": process_stats
+        }
+        if mongo_stats is not None:
+            metrics["mongo_container"] = mongo_stats
+        return result, metrics
 
     def measure_insert_performance(self, db_name: str, db_instance: Any,
                                    data: Dict[str, List[Dict[str, Any]]],
@@ -259,287 +441,446 @@ class BenchmarkRunner:
 
         return base_path
 
-    def export_reports(self, results: Dict[str, Any], base_path: str, formats: List[str]):
+    def export_reports(self, results: Dict[str, Any], base_path: str):
         """
-        Export human-readable benchmark reports.
+        Export a human-readable HTML benchmark report.
 
         Args:
             results: Benchmark results dictionary
             base_path: Base output path returned by save_results
-            formats: List of formats to export (md/html/pdf)
         """
-        requested = {fmt.lower().strip() for fmt in formats if fmt and fmt.strip()}
-        valid_formats = {"md", "html", "pdf"}
-        invalid_formats = sorted(requested - valid_formats)
-        if invalid_formats:
-            self.console.print(f"[yellow]Skipping unknown report formats: {', '.join(invalid_formats)}[/yellow]")
-        selected = sorted(requested & valid_formats)
-        if not selected:
+        html_path = f"{base_path}.html"
+        html_text = self._build_html_report(results)
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_text)
+        self.console.print(f"[green]Report saved to {html_path}[/green]")
+
+    def print_monitoring_summary(self, monitoring: Dict[str, Dict[str, Any]]):
+        """Print CPU/Memory monitoring summary."""
+        if not monitoring:
             return
 
-        md_text = self._build_markdown_report(results)
+        self.console.print("\n[bold cyan]═══ Resource Monitoring Summary ═══[/bold cyan]\n")
 
-        if "md" in selected:
-            md_path = f"{base_path}.md"
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(md_text)
-            self.console.print(f"[green]Report saved to {md_path}[/green]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("DB", style="cyan")
+        table.add_column("Phase")
+        table.add_column("Scope")
+        table.add_column("CPU Avg %", justify="right")
+        table.add_column("CPU Peak %", justify="right")
+        table.add_column("Mem Avg MB", justify="right")
+        table.add_column("Mem Peak MB", justify="right")
+        table.add_column("Status", style="yellow")
 
-        if "html" in selected:
-            html_path = f"{base_path}.html"
-            html_text = self._build_html_report(results)
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_text)
-            self.console.print(f"[green]Report saved to {html_path}[/green]")
+        for db_name, phases in monitoring.items():
+            for phase_name, phase_stats in phases.items():
+                for scope in ("runner_process", "mongo_container"):
+                    stats = phase_stats.get(scope)
+                    if stats is None:
+                        continue
+                    if not stats.get("available"):
+                        table.add_row(
+                            db_name.upper(), phase_name, scope,
+                            "-", "-", "-", "-",
+                            stats.get("reason", "unavailable")
+                        )
+                        continue
 
-        if "pdf" in selected:
-            pdf_path = f"{base_path}.pdf"
-            self._build_pdf_report(md_text, pdf_path)
+                    table.add_row(
+                        db_name.upper(),
+                        phase_name,
+                        scope,
+                        f"{(stats.get('cpu_avg_percent') or 0):.2f}",
+                        f"{(stats.get('cpu_peak_percent') or 0):.2f}",
+                        f"{(stats.get('memory_avg_mb') or 0):.2f}",
+                        f"{(stats.get('memory_peak_mb') or 0):.2f}",
+                        "ok"
+                    )
 
-    def _build_markdown_report(self, results: Dict[str, Any]) -> str:
-        """Build a Markdown report from benchmark results."""
-        lines = ["# Benchmark Report", ""]
-
-        config = results.get("config", {})
-        lines.extend(["## Configuration", ""])
-        for key, value in config.items():
-            lines.append(f"- `{key}`: `{value}`")
-        lines.append("")
-
-        metadata = results.get("metadata", {})
-        entities = metadata.get("entities", {})
-        if entities:
-            lines.extend(["## Entity Schema", ""])
-            for entity_name, entity_meta in entities.items():
-                fields = entity_meta.get("fields", {})
-                if not fields:
-                    continue
-                rows = [{"Field": field, "Type": field_type} for field, field_type in fields.items()]
-                df = pd.DataFrame(rows)
-                lines.append(f"### {entity_name}")
-                lines.append("")
-                lines.append(df.to_markdown(index=False))
-                lines.append("")
-
-        query_complexity = metadata.get("query_complexity", {})
-        if query_complexity:
-            lines.extend(["## Query Complexity", ""])
-            complexity_rows = []
-            for query_id, meta in sorted(query_complexity.items()):
-                complexity_rows.append({
-                    "ID": query_id,
-                    "Level": meta.get("level", ""),
-                    "Why": meta.get("why", ""),
-                    "Features": ", ".join(meta.get("features", []))
-                })
-            if complexity_rows:
-                df = pd.DataFrame(complexity_rows)
-                lines.append(df.to_markdown(index=False))
-                lines.append("")
-                very_high_count = sum(1 for row in complexity_rows if row["Level"] == "very_high")
-                lines.append(f"- Very high complexity queries: **{very_high_count}**")
-                lines.append("")
-
-        inserts = results.get("inserts", {})
-        if inserts:
-            lines.extend(["## Insert Performance", ""])
-            for db_name, entity_results in inserts.items():
-                rows = []
-                total_count = 0
-                total_duration = 0.0
-                for entity, stats in entity_results.items():
-                    count = int(stats.get("count", 0))
-                    duration = float(stats.get("duration_seconds", 0))
-                    throughput = float(stats.get("throughput_per_second", 0))
-                    rows.append([entity, f"{count:,}", f"{duration:.3f}", f"{throughput:,.0f}"])
-                    total_count += count
-                    total_duration += duration
-                avg_tp = total_count / total_duration if total_duration > 0 else 0.0
-                rows.append(["TOTAL", f"{total_count:,}", f"{total_duration:.3f}", f"{avg_tp:,.0f}"])
-                df = pd.DataFrame(rows, columns=["Entity", "Records", "Duration (s)", "Throughput (rec/s)"])
-                lines.append(f"### {db_name.upper()}")
-                lines.append("")
-                lines.append(df.to_markdown(index=False))
-                lines.append("")
-
-        queries = results.get("queries", {})
-        if queries:
-            lines.extend(["## Query Performance", ""])
-            for db_name, query_results in queries.items():
-                if not query_results:
-                    continue
-                rows = []
-                for query_id, stats in query_results.items():
-                    rows.append({
-                        "ID": query_id,
-                        "Query": stats.get("query_name", ""),
-                        "Results": stats.get("avg_result_count", 0),
-                        "Mean (ms)": round(float(stats.get("mean_ms", 0)), 3),
-                        "P95 (ms)": round(float(stats.get("p95_ms", 0)), 3),
-                        "P99 (ms)": round(float(stats.get("p99_ms", 0)), 3),
-                        "Errors": int(stats.get("errors", 0))
-                    })
-                df = pd.DataFrame(rows)
-                lines.append(f"### {db_name.upper()}")
-                lines.append("")
-                lines.append(df.to_markdown(index=False))
-                lines.append("")
-
-        sqlite_queries = queries.get("sqlite")
-        mongo_queries = queries.get("mongo")
-        if sqlite_queries and mongo_queries:
-            cmp_df = self.compare_databases(sqlite_queries, mongo_queries)
-            lines.extend(["## SQLite vs MongoDB Comparison", "", cmp_df.to_markdown(index=False), ""])
-
-        return "\n".join(lines)
+        self.console.print(table)
+        self.console.print()
 
     def _build_html_report(self, results: Dict[str, Any]) -> str:
-        """Build a lightweight HTML report from benchmark results."""
-        html_sections = [
-            "<h1>Benchmark Report</h1>",
-            "<h2>Configuration</h2>",
-            "<table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>"
-        ]
-
-        for key, value in results.get("config", {}).items():
-            html_sections.append(f"<tr><td>{escape(str(key))}</td><td>{escape(str(value))}</td></tr>")
-        html_sections.append("</tbody></table>")
-
+        """Build a detailed, visual HTML report from benchmark results."""
+        config = results.get("config", {})
         metadata = results.get("metadata", {})
         entities = metadata.get("entities", {})
-        if entities:
-            html_sections.append("<h2>Entity Schema</h2>")
-            for entity_name, entity_meta in entities.items():
-                fields = entity_meta.get("fields", {})
-                if not fields:
-                    continue
-                rows = [{"Field": field, "Type": field_type} for field, field_type in fields.items()]
-                df = pd.DataFrame(rows)
-                html_sections.append(f"<h3>{escape(entity_name)}</h3>")
-                html_sections.append(df.to_html(index=False, border=0))
-
         query_complexity = metadata.get("query_complexity", {})
-        if query_complexity:
-            complexity_rows = []
-            for query_id, meta in sorted(query_complexity.items()):
-                complexity_rows.append({
-                    "ID": query_id,
-                    "Level": meta.get("level", ""),
-                    "Why": meta.get("why", ""),
-                    "Features": ", ".join(meta.get("features", []))
-                })
-            if complexity_rows:
-                html_sections.append("<h2>Query Complexity</h2>")
-                df = pd.DataFrame(complexity_rows)
-                html_sections.append(df.to_html(index=False, border=0))
-                very_high_count = sum(1 for row in complexity_rows if row["Level"] == "very_high")
-                html_sections.append(f"<p><strong>Very high complexity queries:</strong> {very_high_count}</p>")
-
         inserts = results.get("inserts", {})
-        if inserts:
-            html_sections.append("<h2>Insert Performance</h2>")
-            for db_name, entity_results in inserts.items():
-                rows = []
-                total_count = 0
-                total_duration = 0.0
-                for entity, stats in entity_results.items():
-                    count = int(stats.get("count", 0))
-                    duration = float(stats.get("duration_seconds", 0))
-                    throughput = float(stats.get("throughput_per_second", 0))
-                    rows.append({
-                        "Entity": entity,
-                        "Records": f"{count:,}",
-                        "Duration (s)": f"{duration:.3f}",
-                        "Throughput (rec/s)": f"{throughput:,.0f}"
-                    })
-                    total_count += count
-                    total_duration += duration
-                avg_tp = total_count / total_duration if total_duration > 0 else 0.0
-                rows.append({
-                    "Entity": "TOTAL",
-                    "Records": f"{total_count:,}",
-                    "Duration (s)": f"{total_duration:.3f}",
-                    "Throughput (rec/s)": f"{avg_tp:,.0f}"
-                })
-                df = pd.DataFrame(rows)
-                html_sections.append(f"<h3>{escape(db_name.upper())}</h3>")
-                html_sections.append(df.to_html(index=False, border=0))
-
         queries = results.get("queries", {})
-        if queries:
-            html_sections.append("<h2>Query Performance</h2>")
-            for db_name, query_results in queries.items():
-                if not query_results:
-                    continue
-                rows = []
-                for query_id, stats in query_results.items():
-                    rows.append({
-                        "ID": query_id,
-                        "Query": stats.get("query_name", ""),
-                        "Results": stats.get("avg_result_count", 0),
-                        "Mean (ms)": round(float(stats.get("mean_ms", 0)), 3),
-                        "P95 (ms)": round(float(stats.get("p95_ms", 0)), 3),
-                        "P99 (ms)": round(float(stats.get("p99_ms", 0)), 3),
-                        "Errors": int(stats.get("errors", 0))
-                    })
-                df = pd.DataFrame(rows)
-                html_sections.append(f"<h3>{escape(db_name.upper())}</h3>")
-                html_sections.append(df.to_html(index=False, border=0))
+        monitoring = results.get("monitoring", {})
 
+        complexity_rank = {"low": 1, "medium": 2, "high": 3, "very_high": 4}
+
+        total_records = 0
+        for db_stats in inserts.values():
+            total_records = max(total_records, sum(int(s.get("count", 0)) for s in db_stats.values()))
+
+        db_query_means = {}
+        for db_name, qstats in queries.items():
+            means = [float(s.get("mean_ms", 0)) for s in qstats.values() if s.get("iterations", 0) > 0]
+            if means:
+                db_query_means[db_name] = float(np.mean(means))
+
+        very_high_count = sum(1 for meta in query_complexity.values() if meta.get("level") == "very_high")
+
+        def _max_metric(db: str, scope: str, metric: str) -> float:
+            phases = monitoring.get(db, {})
+            vals = []
+            for phase in phases.values():
+                stats = phase.get(scope, {})
+                if stats.get("available") and stats.get(metric) is not None:
+                    vals.append(float(stats.get(metric)))
+            return max(vals) if vals else 0.0
+
+        sqlite_peak_cpu = _max_metric("sqlite", "runner_process", "cpu_peak_percent")
+        sqlite_peak_mem = _max_metric("sqlite", "runner_process", "memory_peak_mb")
+        mongo_peak_cpu = _max_metric("mongo", "mongo_container", "cpu_peak_percent")
+        mongo_peak_mem = _max_metric("mongo", "mongo_container", "memory_peak_mb")
+
+        highlight_rows = []
+        for query_id, meta in query_complexity.items():
+            qname = ""
+            mean_candidates = []
+            for db_name, qstats in queries.items():
+                if query_id in qstats:
+                    s = qstats[query_id]
+                    qname = s.get("query_name", qname)
+                    if s.get("iterations", 0) > 0:
+                        mean_candidates.append(float(s.get("mean_ms", 0)))
+            highlight_rows.append({
+                "id": query_id,
+                "name": qname or query_id,
+                "level": meta.get("level", "low"),
+                "score": complexity_rank.get(meta.get("level", "low"), 1),
+                "mean_ms": max(mean_candidates) if mean_candidates else 0.0,
+                "why": meta.get("why", "")
+            })
+
+        highlight_rows = sorted(highlight_rows, key=lambda r: (r["score"], r["mean_ms"]), reverse=True)[:6]
+
+        def table_from_df(df: pd.DataFrame) -> str:
+            return df.to_html(index=False, border=0, classes="report-table", justify="left")
+
+        def level_badge(level: str) -> str:
+            safe = escape(level.lower())
+            label = safe.replace("_", " ").title()
+            return f"<span class='badge {safe}'>{label}</span>"
+
+        config_rows = "".join(
+            f"<tr><td>{escape(str(k))}</td><td>{escape(str(v))}</td></tr>"
+            for k, v in config.items()
+        )
+
+        entity_sections = []
+        for entity_name, entity_meta in entities.items():
+            fields = entity_meta.get("fields", {})
+            if not fields:
+                continue
+            field_df = pd.DataFrame(
+                [{"Field": name, "Type": field_type} for name, field_type in fields.items()]
+            )
+            nested_count = sum(1 for t in fields.values() if "object" in t or "array" in t)
+            entity_sections.append(
+                f"""
+                <details class="entity-card">
+                  <summary><strong>{escape(entity_name)}</strong> <span class="muted">({len(fields)} fields, {nested_count} nested)</span></summary>
+                  {table_from_df(field_df)}
+                </details>
+                """
+            )
+
+        complexity_rows = []
+        for query_id, meta in sorted(query_complexity.items()):
+            complexity_rows.append({
+                "ID": query_id,
+                "Complexity": level_badge(meta.get("level", "low")),
+                "Why": escape(meta.get("why", "")),
+                "Features": escape(", ".join(meta.get("features", [])))
+            })
+        complexity_df = pd.DataFrame(complexity_rows) if complexity_rows else pd.DataFrame()
+        if not complexity_df.empty:
+            complexity_html = complexity_df.to_html(index=False, border=0, classes="report-table", escape=False)
+        else:
+            complexity_html = "<p class='muted'>No complexity metadata available.</p>"
+
+        insert_sections = []
+        for db_name, entity_results in inserts.items():
+            rows = []
+            total_count = 0
+            total_duration = 0.0
+            for entity, stats in entity_results.items():
+                count = int(stats.get("count", 0))
+                duration = float(stats.get("duration_seconds", 0))
+                throughput = float(stats.get("throughput_per_second", 0))
+                rows.append({
+                    "Entity": entity,
+                    "Records": f"{count:,}",
+                    "Duration (s)": f"{duration:.3f}",
+                    "Throughput (rec/s)": f"{throughput:,.0f}"
+                })
+                total_count += count
+                total_duration += duration
+            avg_tp = total_count / total_duration if total_duration > 0 else 0.0
+            rows.append({
+                "Entity": "TOTAL",
+                "Records": f"{total_count:,}",
+                "Duration (s)": f"{total_duration:.3f}",
+                "Throughput (rec/s)": f"{avg_tp:,.0f}"
+            })
+            insert_sections.append(
+                f"<section class='panel'><h3>{escape(db_name.upper())} Insert Throughput</h3>{table_from_df(pd.DataFrame(rows))}</section>"
+            )
+
+        query_sections = []
+        for db_name, query_results in queries.items():
+            if not query_results:
+                continue
+            rows = []
+            for query_id, stats in query_results.items():
+                level = query_complexity.get(query_id, {}).get("level", "low")
+                rows.append({
+                    "ID": query_id,
+                    "Complexity": level_badge(level),
+                    "Query": escape(stats.get("query_name", "")),
+                    "Results": f"{int(stats.get('avg_result_count', 0)):,}",
+                    "Mean (ms)": f"{float(stats.get('mean_ms', 0)):.2f}",
+                    "P95 (ms)": f"{float(stats.get('p95_ms', 0)):.2f}",
+                    "P99 (ms)": f"{float(stats.get('p99_ms', 0)):.2f}",
+                    "Errors": int(stats.get("errors", 0))
+                })
+            qdf = pd.DataFrame(rows)
+            query_sections.append(
+                f"<section class='panel'><h3>{escape(db_name.upper())} Query Latency</h3>{qdf.to_html(index=False, border=0, classes='report-table', escape=False)}</section>"
+            )
+
+        comparison_panel = ""
         sqlite_queries = queries.get("sqlite")
         mongo_queries = queries.get("mongo")
         if sqlite_queries and mongo_queries:
-            html_sections.append("<h2>SQLite vs MongoDB Comparison</h2>")
             cmp_df = self.compare_databases(sqlite_queries, mongo_queries)
-            html_sections.append(cmp_df.to_html(index=False, border=0))
+            max_speedup = float(cmp_df["Speedup %"].max()) if not cmp_df.empty else 1.0
+            max_speedup = max(max_speedup, 1.0)
+            bar_rows = []
+            for _, row in cmp_df.sort_values("Speedup %", ascending=False).iterrows():
+                faster = str(row["Faster"])
+                if faster == "SQLite":
+                    db_class = "sqlite"
+                elif faster == "MongoDB":
+                    db_class = "mongo"
+                else:
+                    db_class = "neutral"
+                width = (float(row["Speedup %"]) / max_speedup) * 100.0
+                bar_rows.append(
+                    f"""
+                    <div class="speed-row">
+                      <div class="speed-label">{escape(row['Query ID'])} <span class="muted">{escape(str(row['Query Name'])[:42])}</span></div>
+                      <div class="speed-track"><span class="speed-fill {db_class}" style="width:{width:.1f}%"></span></div>
+                      <div class="speed-value">{escape(faster)} {float(row['Speedup %']):.1f}%</div>
+                    </div>
+                    """
+                )
+            comparison_panel = f"""
+            <section class="panel">
+              <h3>SQLite vs MongoDB: Relative Wins</h3>
+              <div class="speed-grid">{''.join(bar_rows)}</div>
+              {table_from_df(cmp_df.round(3))}
+            </section>
+            """
 
-        style = """
-<style>
-body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.45; color: #1f2937; }
-h1, h2, h3 { color: #0f172a; }
-table { border-collapse: collapse; margin-bottom: 20px; width: 100%; }
-th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; font-size: 14px; }
-th { background: #f3f4f6; }
-tr:nth-child(even) { background: #fafafa; }
-pre { background: #f8fafc; border: 1px solid #e5e7eb; padding: 10px; white-space: pre-wrap; }
-</style>
-"""
-        return f"<!doctype html><html><head><meta charset='utf-8'><title>Benchmark Report</title>{style}</head><body>{''.join(html_sections)}</body></html>"
+        monitoring_rows = []
+        for db_name, phases in monitoring.items():
+            for phase_name, phase_stats in phases.items():
+                for scope in ("runner_process", "mongo_container"):
+                    stats = phase_stats.get(scope)
+                    if stats is None:
+                        continue
+                    monitoring_rows.append({
+                        "DB": db_name.upper(),
+                        "Phase": phase_name,
+                        "Scope": scope,
+                        "CPU Avg %": "-" if not stats.get("available") or stats.get("cpu_avg_percent") is None else f"{float(stats.get('cpu_avg_percent')):.2f}",
+                        "CPU Peak %": "-" if not stats.get("available") or stats.get("cpu_peak_percent") is None else f"{float(stats.get('cpu_peak_percent')):.2f}",
+                        "Mem Avg MB": "-" if not stats.get("available") or stats.get("memory_avg_mb") is None else f"{float(stats.get('memory_avg_mb')):.2f}",
+                        "Mem Peak MB": "-" if not stats.get("available") or stats.get("memory_peak_mb") is None else f"{float(stats.get('memory_peak_mb')):.2f}",
+                        "Status": "ok" if stats.get("available") else escape(stats.get("reason", "unavailable"))
+                    })
+        monitoring_html = (
+            table_from_df(pd.DataFrame(monitoring_rows))
+            if monitoring_rows else "<p class='muted'>Monitoring metrics were not collected.</p>"
+        )
 
-    def _build_pdf_report(self, md_text: str, output_path: str):
-        """
-        Build a simple PDF report using matplotlib.
-        Falls back gracefully if PDF backend is unavailable.
-        """
-        try:
-            import matplotlib.pyplot as plt
-            from matplotlib.backends.backend_pdf import PdfPages
-            import textwrap
+        highlight_cards = []
+        for row in highlight_rows:
+            highlight_cards.append(
+                f"""
+                <article class="mini-card">
+                  <div class="mini-top">
+                    <span class="query-id">{escape(row['id'])}</span>
+                    {level_badge(row['level'])}
+                  </div>
+                  <h4>{escape(row['name'])}</h4>
+                  <p class="muted">{escape(row['why'])}</p>
+                  <div class="metric-line">Worst mean latency: <strong>{row['mean_ms']:.2f} ms</strong></div>
+                </article>
+                """
+            )
 
-            lines = md_text.splitlines()
-            pages = []
-            current = []
-            for line in lines:
-                wrapped = textwrap.wrap(line, width=110) or [""]
-                if len(current) + len(wrapped) > 50:
-                    pages.append(current)
-                    current = []
-                current.extend(wrapped)
-            if current:
-                pages.append(current)
+        html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Benchmark Report</title>
+  <style>
+    :root {{
+      --bg1:#f4fbf6; --bg2:#e8f4ff; --ink:#0f172a; --muted:#4b5563;
+      --panel:#ffffff; --line:#dbe3ec; --accent:#0f766e; --accent2:#0369a1;
+      --low:#94a3b8; --medium:#0ea5e9; --high:#f59e0b; --veryhigh:#dc2626;
+      --sqlite:#0ea5a4; --mongo:#2563eb; --neutral:#64748b;
+    }}
+    * {{ box-sizing:border-box; }}
+    body {{
+      margin:0; color:var(--ink); line-height:1.45;
+      font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+      background: radial-gradient(circle at 12% 15%, var(--bg1), transparent 35%),
+                  radial-gradient(circle at 88% 5%, var(--bg2), transparent 30%),
+                  linear-gradient(140deg, #f8fafc, #eef6ff 55%, #f7fbf3);
+    }}
+    .wrap {{ width:min(1200px, 94vw); margin:28px auto 60px; }}
+    .hero {{
+      background: linear-gradient(120deg, #0f766e, #0369a1 60%, #334155);
+      color:#f8fafc; border-radius:20px; padding:28px 30px; box-shadow:0 18px 40px rgba(15,23,42,.22);
+      animation: fadeUp .5s ease both;
+    }}
+    .hero h1 {{ margin:0 0 6px; font-size: clamp(1.6rem, 2.2vw, 2.3rem); letter-spacing:.2px; }}
+    .hero p {{ margin:0; opacity:.92; }}
+    .kpi-grid {{
+      display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; margin-top:18px;
+    }}
+    .kpi {{
+      background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.24);
+      border-radius:14px; padding:14px 12px;
+    }}
+    .kpi .label {{ font-size:.78rem; text-transform:uppercase; letter-spacing:.08em; opacity:.88; }}
+    .kpi .value {{ font-size:1.45rem; font-weight:700; margin-top:4px; }}
+    .section {{ margin-top:24px; animation: fadeUp .55s ease both; }}
+    .section h2 {{ margin:0 0 12px; font-size:1.2rem; }}
+    .panel {{
+      background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px;
+      box-shadow:0 8px 24px rgba(15,23,42,.06);
+    }}
+    .panel h3 {{ margin:0 0 10px; color:#0b3b55; }}
+    .stack {{ display:grid; gap:14px; }}
+    .two-col {{ display:grid; gap:14px; grid-template-columns:1fr; }}
+    @media (min-width: 980px) {{ .two-col {{ grid-template-columns: 1.1fr 1fr; }} }}
+    .report-table {{ width:100%; border-collapse:collapse; font-size:.9rem; }}
+    .report-table th, .report-table td {{ border-bottom:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }}
+    .report-table th {{ background:#f8fbff; color:#0b3b55; position:sticky; top:0; }}
+    .report-table tr:hover td {{ background:#f7fbff; }}
+    .muted {{ color:var(--muted); }}
+    details.entity-card {{
+      background:#fff; border:1px solid var(--line); border-radius:12px; padding:8px 12px; margin-bottom:10px;
+    }}
+    details.entity-card summary {{ cursor:pointer; padding:4px 0; }}
+    .badge {{
+      display:inline-block; border-radius:999px; padding:2px 9px; font-size:.74rem; font-weight:700;
+      text-transform:uppercase; letter-spacing:.04em;
+    }}
+    .badge.low {{ background:#e2e8f0; color:#334155; }}
+    .badge.medium {{ background:#dbeafe; color:#1d4ed8; }}
+    .badge.high {{ background:#fef3c7; color:#92400e; }}
+    .badge.very_high {{ background:#fee2e2; color:#991b1b; }}
+    .highlights {{ display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }}
+    .mini-card {{
+      background:#fff; border:1px solid var(--line); border-radius:14px; padding:14px;
+      box-shadow:0 6px 20px rgba(2,132,199,.08);
+    }}
+    .mini-top {{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }}
+    .query-id {{ font-weight:700; color:#0b3b55; }}
+    .mini-card h4 {{ margin:0 0 6px; font-size:1rem; }}
+    .metric-line {{ margin-top:8px; font-size:.9rem; }}
+    .speed-grid {{ display:grid; gap:8px; margin-bottom:14px; }}
+    .speed-row {{ display:grid; grid-template-columns: minmax(170px, 1.2fr) 2fr 130px; align-items:center; gap:10px; }}
+    .speed-label {{ font-size:.86rem; }}
+    .speed-track {{ height:10px; background:#e2e8f0; border-radius:999px; overflow:hidden; }}
+    .speed-fill {{ display:block; height:100%; border-radius:999px; }}
+    .speed-fill.sqlite {{ background:linear-gradient(90deg, #14b8a6, #0f766e); }}
+    .speed-fill.mongo {{ background:linear-gradient(90deg, #60a5fa, #1d4ed8); }}
+    .speed-fill.neutral {{ background:linear-gradient(90deg, #94a3b8, #64748b); }}
+    .speed-value {{ text-align:right; font-size:.86rem; font-weight:600; }}
+    @keyframes fadeUp {{ from {{ opacity:0; transform:translateY(8px); }} to {{ opacity:1; transform:none; }} }}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <h1>SQLite vs MongoDB Benchmark Report</h1>
+      <p>Detailed performance, schema and complexity analysis generated from your latest run.</p>
+        <div class="kpi-grid">
+        <div class="kpi"><div class="label">Base Records</div><div class="value">{int(config.get('records', 0)):,}</div></div>
+        <div class="kpi"><div class="label">Generated Records</div><div class="value">{total_records:,}</div></div>
+        <div class="kpi"><div class="label">Query Set Size</div><div class="value">{len(query_complexity)}</div></div>
+        <div class="kpi"><div class="label">Very High Complexity</div><div class="value">{very_high_count}</div></div>
+        <div class="kpi"><div class="label">Avg SQLite Mean</div><div class="value">{db_query_means.get('sqlite', 0):.2f} ms</div></div>
+        <div class="kpi"><div class="label">Avg Mongo Mean</div><div class="value">{db_query_means.get('mongo', 0):.2f} ms</div></div>
+        <div class="kpi"><div class="label">SQLite Peak CPU</div><div class="value">{sqlite_peak_cpu:.1f}%</div></div>
+        <div class="kpi"><div class="label">SQLite Peak Mem</div><div class="value">{sqlite_peak_mem:.1f} MB</div></div>
+        <div class="kpi"><div class="label">Mongo Peak CPU</div><div class="value">{mongo_peak_cpu:.1f}%</div></div>
+        <div class="kpi"><div class="label">Mongo Peak Mem</div><div class="value">{mongo_peak_mem:.1f} MB</div></div>
+      </div>
+    </section>
 
-            with PdfPages(output_path) as pdf:
-                for page_lines in pages:
-                    fig = plt.figure(figsize=(8.27, 11.69))  # A4
-                    fig.patch.set_facecolor("white")
-                    text = "\n".join(page_lines)
-                    fig.text(0.04, 0.98, text, va="top", ha="left", family="monospace", fontsize=8)
-                    pdf.savefig(fig, bbox_inches="tight")
-                    plt.close(fig)
+    <section class="section two-col">
+      <article class="panel">
+        <h2>Run Configuration</h2>
+        <table class="report-table"><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody>{config_rows}</tbody></table>
+      </article>
+      <article class="panel">
+        <h2>Most Demanding Queries</h2>
+        <div class="highlights">{''.join(highlight_cards)}</div>
+      </article>
+    </section>
 
-            self.console.print(f"[green]Report saved to {output_path}[/green]")
-        except Exception as e:
-            self.console.print(f"[yellow]Could not create PDF report: {e}[/yellow]")
+    <section class="section">
+      <article class="panel">
+        <h2>Entity Schema</h2>
+        <p class="muted">Field names and data types per entity, including nested structures.</p>
+        {''.join(entity_sections)}
+      </article>
+    </section>
+
+    <section class="section">
+      <article class="panel">
+        <h2>Query Complexity</h2>
+        <p class="muted">Complexity profile shows why each query is simple/advanced and what operations dominate runtime.</p>
+        {complexity_html}
+      </article>
+    </section>
+
+    <section class="section stack">
+      {''.join(insert_sections)}
+    </section>
+
+    <section class="section stack">
+      {''.join(query_sections)}
+    </section>
+
+    <section class="section">
+      <article class="panel">
+        <h2>Resource Monitoring (CPU / Memory)</h2>
+        <p class="muted">Sampled during inserts and queries for each solution.</p>
+        {monitoring_html}
+      </article>
+    </section>
+
+    <section class="section">
+      {comparison_panel}
+    </section>
+  </main>
+</body>
+</html>"""
+        return html
 
     def print_insert_summary(self, insert_results: Dict[str, Dict[str, Any]]):
         """

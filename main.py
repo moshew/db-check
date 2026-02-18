@@ -258,13 +258,6 @@ Examples:
     )
 
     parser.add_argument(
-        '--report-formats',
-        type=str,
-        default='md,html,pdf',
-        help='Comma-separated report formats to export: md,html,pdf (default: md,html,pdf)'
-    )
-
-    parser.add_argument(
         '--reset',
         action='store_true',
         help='Reset databases before running (drop all data)'
@@ -333,6 +326,7 @@ Examples:
             'entities': DataGenerator.get_entity_schema_definitions(),
             'query_complexity': query_complexity
         },
+        'monitoring': {},
         'inserts': {},
         'queries': {}
     }
@@ -363,14 +357,22 @@ Examples:
             console.print("\n[bold yellow]═══ PHASE 1: INSERT BENCHMARKS ═══[/bold yellow]")
 
             if run_sqlite:
-                all_results['inserts']['sqlite'] = run_insert_benchmark(
-                    'sqlite', sqlite_db, data, args.batch_size, runner
+                insert_result, monitor_stats = runner.run_with_monitoring(
+                    db_name='sqlite',
+                    phase_name='inserts',
+                    workload=lambda: run_insert_benchmark('sqlite', sqlite_db, data, args.batch_size, runner)
                 )
+                all_results['inserts']['sqlite'] = insert_result
+                all_results['monitoring'].setdefault('sqlite', {})['inserts'] = monitor_stats
 
             if run_mongo:
-                all_results['inserts']['mongo'] = run_insert_benchmark(
-                    'mongo', mongo_db, data, args.batch_size, runner
+                insert_result, monitor_stats = runner.run_with_monitoring(
+                    db_name='mongo',
+                    phase_name='inserts',
+                    workload=lambda: run_insert_benchmark('mongo', mongo_db, data, args.batch_size, runner)
                 )
+                all_results['inserts']['mongo'] = insert_result
+                all_results['monitoring'].setdefault('mongo', {})['inserts'] = monitor_stats
 
             # Print insert summary
             runner.print_insert_summary(all_results['inserts'])
@@ -392,15 +394,23 @@ Examples:
             console.print("\n[bold yellow]═══ PHASE 2: QUERY BENCHMARKS ═══[/bold yellow]")
 
             if run_sqlite:
-                all_results['queries']['sqlite'] = run_query_benchmark(
-                    'sqlite', sqlite_db, args.iterations, args.warmup, runner
+                query_result, monitor_stats = runner.run_with_monitoring(
+                    db_name='sqlite',
+                    phase_name='queries',
+                    workload=lambda: run_query_benchmark('sqlite', sqlite_db, args.iterations, args.warmup, runner)
                 )
+                all_results['queries']['sqlite'] = query_result
+                all_results['monitoring'].setdefault('sqlite', {})['queries'] = monitor_stats
                 runner.print_query_summary(all_results['queries']['sqlite'], 'sqlite')
 
             if run_mongo:
-                all_results['queries']['mongo'] = run_query_benchmark(
-                    'mongo', mongo_db, args.iterations, args.warmup, runner
+                query_result, monitor_stats = runner.run_with_monitoring(
+                    db_name='mongo',
+                    phase_name='queries',
+                    workload=lambda: run_query_benchmark('mongo', mongo_db, args.iterations, args.warmup, runner)
                 )
+                all_results['queries']['mongo'] = query_result
+                all_results['monitoring'].setdefault('mongo', {})['queries'] = monitor_stats
                 runner.print_query_summary(all_results['queries']['mongo'], 'mongo')
 
             # Comparison (if both databases were run)
@@ -415,11 +425,12 @@ Examples:
                 chart_path = f"{args.output}_comparison.png"
                 runner.create_performance_chart(comparison_df, chart_path)
 
+        runner.print_monitoring_summary(all_results['monitoring'])
+
         # Save results
         console.print("\n[bold]Saving results...[/bold]")
         base_path = runner.save_results(all_results, args.output)
-        report_formats = [fmt.strip() for fmt in args.report_formats.split(',') if fmt.strip()]
-        runner.export_reports(all_results, base_path, report_formats)
+        runner.export_reports(all_results, base_path)
 
         # Print database sizes
         console.print("\n[bold cyan]Database Sizes:[/bold cyan]")
