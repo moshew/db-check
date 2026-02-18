@@ -186,7 +186,7 @@ Examples:
   python main.py --db mongo --records 100000 --batch-size 5000
 
   # Run with indexes and save results
-  python main.py --db both --records 10000 --with-indexes --output results/benchmark
+  python main.py --db both --records 10000 --with-indexes --html results/benchmark
 
   # Run without indexes to compare
   python main.py --db both --records 10000 --no-indexes
@@ -251,10 +251,10 @@ Examples:
     )
 
     parser.add_argument(
-        '--output',
+        '--html',
         type=str,
         default='results/benchmark',
-        help='Output path for results (default: results/benchmark)'
+        help='Base output path for HTML report and result artifacts (default: results/benchmark)'
     )
 
     parser.add_argument(
@@ -423,7 +423,7 @@ Examples:
                 runner.print_comparison_summary(comparison_df)
 
                 # Create chart
-                chart_path = f"{args.output}_comparison.png"
+                chart_path = f"{args.html}_comparison.png"
                 runner.create_performance_chart(comparison_df, chart_path)
                 all_results['metadata']['artifacts']['comparison_chart_png'] = chart_path
 
@@ -431,7 +431,7 @@ Examples:
 
         # Save results
         console.print("\n[bold]Saving results...[/bold]")
-        base_path = runner.save_results(all_results, args.output)
+        base_path = runner.save_results(all_results, args.html)
         runner.export_reports(all_results, base_path)
 
         # Print database sizes

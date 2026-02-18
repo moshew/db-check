@@ -56,6 +56,17 @@ def _parse_size_to_mb(size_text: str) -> Optional[float]:
     return value * factor
 
 
+def _normalize_docker_error(error_text: str) -> str:
+    text = (error_text or "").lower()
+    if "permission denied while trying to connect to the docker daemon socket" in text:
+        return "no docker socket access (re-login or run newgrp docker)"
+    if "a password is required" in text or "a terminal is required" in text:
+        return "docker stats via sudo needs interactive password"
+    if "command not found" in text:
+        return "docker command not found"
+    return (error_text or "docker_stats_failed").strip()
+
+
 class _BaseMonitor:
     def __init__(self, sample_interval_s: float = 0.5):
         self.sample_interval_s = sample_interval_s
@@ -126,22 +137,34 @@ class _DockerContainerMonitor(_BaseMonitor):
         self.container_name = container_name
 
     def _run(self):
+        base_cmd = [
+            "docker", "stats", "--no-stream",
+            "--format", "{{.CPUPerc}}|{{.MemUsage}}",
+            self.container_name
+        ]
+        fallback_cmd = [
+            "sudo", "-n", "docker", "stats", "--no-stream",
+            "--format", "{{.CPUPerc}}|{{.MemUsage}}",
+            self.container_name
+        ]
+
         while self._running:
             try:
-                proc = subprocess.run(
-                    [
-                        "docker", "stats", "--no-stream",
-                        "--format", "{{.CPUPerc}}|{{.MemUsage}}",
-                        self.container_name
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False
-                )
+                proc = subprocess.run(base_cmd, capture_output=True, text=True, check=False)
                 if proc.returncode != 0:
-                    self._error = proc.stderr.strip() or proc.stdout.strip() or "docker_stats_failed"
-                    self._running = False
-                    return
+                    base_err = (proc.stderr.strip() or proc.stdout.strip() or "docker_stats_failed")
+                    if "permission denied while trying to connect to the Docker daemon socket" in base_err:
+                        sudo_proc = subprocess.run(fallback_cmd, capture_output=True, text=True, check=False)
+                        if sudo_proc.returncode != 0:
+                            sudo_err = sudo_proc.stderr.strip() or sudo_proc.stdout.strip() or "docker_stats_failed"
+                            self._error = _normalize_docker_error(sudo_err)
+                            self._running = False
+                            return
+                        proc = sudo_proc
+                    else:
+                        self._error = _normalize_docker_error(base_err)
+                        self._running = False
+                        return
 
                 line = proc.stdout.strip().splitlines()
                 if not line:
@@ -156,7 +179,7 @@ class _DockerContainerMonitor(_BaseMonitor):
                 if mem_used is not None:
                     self._mem_samples_mb.append(mem_used)
             except FileNotFoundError:
-                self._error = "docker_command_not_found"
+                self._error = "docker command not found"
                 self._running = False
                 return
             except Exception as exc:
@@ -685,11 +708,21 @@ class BenchmarkRunner:
                     </div>
                     """
                 )
+
+            cmp_display_df = cmp_df.copy()
+            query_id_with_dot = []
+            for _, row in cmp_display_df.iterrows():
+                qid = str(row.get("Query ID", ""))
+                level = str(query_complexity.get(qid, {}).get("level", "low")).lower()
+                dot = f"<span class='complexity-dot {escape(level)}' title='{escape(level.replace('_', ' ').title())}'></span>"
+                query_id_with_dot.append(f"<span class='qid-cell'>{dot}<span>{escape(qid)}</span></span>")
+            cmp_display_df["Query ID"] = query_id_with_dot
+
             comparison_panel = f"""
             <section class="panel">
               <h3>SQLite vs MongoDB: Relative Wins</h3>
               <div class="speed-grid">{''.join(bar_rows)}</div>
-              {table_from_df(cmp_df.round(3))}
+              {cmp_display_df.round(3).to_html(index=False, border=0, classes='report-table', escape=False)}
             </section>
             """
 
@@ -701,15 +734,15 @@ class BenchmarkRunner:
                     chart_b64 = base64.b64encode(chart_file.read()).decode("ascii")
                 embedded_chart_html = f"""
                 <section class="panel">
-                  <h3>Comparison Chart (Embedded PNG)</h3>
-                  <p class="muted">This image is embedded in the HTML as Base64 (self-contained report).</p>
+                  <h3>Comparison Chart</h3>
+                  <p class="muted">Visual comparison of query latency and relative speedup between SQLite and MongoDB.</p>
                   <img class="embedded-chart" src="data:image/png;base64,{chart_b64}" alt="SQLite vs MongoDB comparison chart" />
                 </section>
                 """
             except Exception as exc:
                 embedded_chart_html = f"""
                 <section class="panel">
-                  <h3>Comparison Chart (Embedded PNG)</h3>
+                  <h3>Comparison Chart</h3>
                   <p class="muted">Could not embed chart image: {escape(str(exc))}</p>
                 </section>
                 """
@@ -837,6 +870,22 @@ class BenchmarkRunner:
     .speed-fill.mongo {{ background:linear-gradient(90deg, #60a5fa, #1d4ed8); }}
     .speed-fill.neutral {{ background:linear-gradient(90deg, #94a3b8, #64748b); }}
     .speed-value {{ text-align:right; font-size:.86rem; font-weight:600; }}
+    .complexity-dot {{
+      display:inline-block;
+      width:10px;
+      height:10px;
+      border-radius:50%;
+      vertical-align:middle;
+    }}
+    .complexity-dot.low {{ background: var(--low); }}
+    .complexity-dot.medium {{ background: var(--medium); }}
+    .complexity-dot.high {{ background: var(--high); }}
+    .complexity-dot.very_high {{ background: var(--veryhigh); }}
+    .qid-cell {{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+    }}
     .embedded-chart {{
       width: 100%;
       border-radius: 12px;
